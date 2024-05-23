@@ -1,0 +1,173 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+install.packages("devtools")
+library(devtools)
+devtools::install_github("Natsiopoulos/ARDL")
+
+install.packages("rlang")
+devtools::install_version("pbkrtest", version = "0.5.1")
+
+
+# Definir las fechas de inicio y fin
+start_date <- as.Date("2019-04-22")
+end_date <- as.Date("2022-12-31")
+
+# Definir los símbolos de las acciones
+symbols <- c("RYLD", "TSLA", "TM", "GM")
+
+# Descargar los datos de precios de cierre ajustados
+getSymbols(symbols, src = "yahoo", from = start_date, to = end_date)
+
+# Extraer y mostrar los precios de cierre ajustados
+RYLD_close <- Cl(RYLD)
+TSLA_close <- Cl(TSLA)
+TM_close <- Cl(TM)
+GM_close <- Cl(GM)
+
+# Cargar el paquete necesario
+if (!requireNamespace("xts", quietly = TRUE)) {
+  install.packages("xts")
+}
+library(xts)
+
+# Combinar las series en un solo data frame
+prices <- merge.xts(RYLD_close, TSLA_close, TM_close, GM_close)
+colnames(prices) <- c("RYLD", "TSLA", "TM", "GM")
+
+
+# Convertir `prices` a un objeto ts
+prices_ts <- as.ts(prices)
+
+# Función para verificar e instalar el paquete 'tseries'
+check_and_install_tseries <- function() {
+  if (!require("tseries", character.only = TRUE)) {
+    install.packages("tseries", dependencies = TRUE)
+    library(tseries, character.only = TRUE)
+  }
+}
+
+# Verificar e instalar el paquete 'tseries'
+check_and_install_tseries()
+
+# Aplicar el test de Dickey-Fuller aumentado a cada columna
+adf_results <- lapply(prices_ts, adf.test)
+
+# Mostrar los resultados para cada columna
+for (i in 1:length(adf_results)) {
+  cat("Columna:", names(adf_results)[i], "\n")
+  print(adf_results[[i]])
+  cat("\n")
+}
+
+library(ARDL)
+#Se realiza una búsqueda tipo grid search:
+#Selección automatica:
+models <- auto_ardl(RYLD ~ TSLA +TM + GM, data = prices_ts, max_order = 6)
+
+#Revisemos el top 20 de los mejores modelos según su critrio de información de Akaike
+models$top_orders
+
+#Procedemos a construir el modelo de regresión con la mejor combinación.
+mod1 <- ardl(RYLD ~ TSLA +TM + GM, data = prices_ts, order = c(3,1,1,3))
+summary(mod1)
+
+# Para la interpretación, podemos imprimir los rezagos correspondientes de cada variable que explican la respuesta. Esto no indica que sean I(d), sino el número de rezagos que logran una corrección al error.
+mod1$full_formula
+
+##Predicción del primer modelo sin tendencia:
+stats::predict(mod1$fitted.values, h=10)
+autoplot(predict(mod1$fitted.values, h=10))
+
+
+#Guardamos el mejor modelo obtenido en la sección anterior
+modelo <- models$best_model
+
+#Realizamos la prueba de hipotesis
+bounds_f_test(modelo, case = 2) # el parametro "case" igual a 2 verifica si existe relaciones a largo termino, con la combinación de (restricted constant, no linear trend)
+
+#Realizamos la prueba de hipotesis para el modelo con tendencia
+bounds_f_test(mod1_ten, case = 4) # el parametro "case" igual a 4 implica (unrestricted constant, linear trend)
+
+#Multiplicadores a corto plazo
+multipliers(modelo, type = "sr")
+
+#Multiplicadores a largo plazo
+multipliers(modelo)
+
+
+# Partición de los datos en 5% de prueba y 95% de entrenamiento
+set.seed(123) # Para reproducibilidad
+n <- nrow(prices_ts)
+train_index <- 1:floor(0.95 * n)
+test_index <- (floor(0.95 * n) + 1):n
+
+train_data <- prices_ts[train_index, ]
+test_data <- prices_ts[test_index, ]
+
+# Seleccionar solo la primera columna de test_data
+test_data <- test_data[, 1]
+
+#Se realiza una búsqueda tipo grid search:
+#Selección automatica:
+models2 <- auto_ardl(RYLD ~ TSLA +TM + GM, data = train_data, max_order = 6)
+
+#Revisemos el top 20 de los mejores modelos según su critrio de información de Akaike
+models2$top_orders
+
+#Guardamos el mejor modelo obtenido en la sección anterior
+modeloF <- models2$best_model
+
+summary(modeloF)
+modeloF$full_formula
+
+#Realizamos la prueba de hipotesis
+bounds_f_test(modeloF, case = 2) # el parametro "case" igual a 2 verifica si existe relaciones a largo termino, con la combinación de (restricted constant, no linear trend)
+
+#Realizamos la prueba de hipotesis para el modelo con tendencia
+bounds_f_test(modeloF, case = 4) # el parametro "case" igual a 4 implica (unrestricted constant, linear trend)
+
+#Multiplicadores a corto plazo
+multipliers(modeloF, type = "sr")
+
+#Multiplicadores a largo plazo
+multipliers(modeloF)
+
+
+##Predicción
+stats::predict(modeloF$fitted.values, h=47)
+autoplot(predict(modeloF$fitted.values, h=47))
+
+# Predicción
+pred <- predict(modeloF$fitted.values, h = 47)
+
+class(pred)
+
+# Convertir test_data a un data frame si es un vector atómico
+if (!is.data.frame(test_data)) {
+  test_data <- as.data.frame(test_data)
+}
+
+# 1. Convertir test_data a un vector numérico usando solo la primera columna
+test_values <- as.numeric(test_data[, 1])
+
+# 2. Extraer los valores pronosticados de pred
+pred_values <- pred$mean
+
+# Calcular MAPE (Mean Absolute Percentage Error)
+MAPE <- mean(abs((test_values - pred_values) / test_values)) * 100
+
+# Calcular RMSE (Root Mean Squared Error)
+RMSE <- sqrt(mean((pred_values - test_values)^2))
+
+# Calcular MAE (Mean Absolute Error)
+MAE <- mean(abs(pred_values - as.numeric(test_data[, 1])))
+
+
+# Imprimir las métricas calculadas
+cat("MAPE:", MAPE, "\n")
+cat("RMSE:", RMSE, "\n")
+cat("MAE:", MAE, "\n")
+

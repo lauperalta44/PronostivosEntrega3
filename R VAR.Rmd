@@ -1,0 +1,341 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Instalar y cargar los paquetes necesarios
+if (!require(quantmod)) {
+  install.packages("quantmod")
+}
+if (!require(ggplot2)) {
+  install.packages("ggplot2")
+}
+if (!require(reshape2)) {
+  install.packages("reshape2")
+}
+
+library(quantmod)
+library(ggplot2)
+library(reshape2)
+
+# Definir las fechas de inicio y fin
+start_date <- as.Date("2019-04-22")
+end_date <- as.Date("2022-12-31")
+
+# Definir los símbolos de las acciones
+symbols <- c("RYLD", "TSLA", "TM", "GM")
+
+# Descargar los datos de precios de cierre ajustados
+getSymbols(symbols, src = "yahoo", from = start_date, to = end_date)
+
+# Extraer y mostrar los precios de cierre ajustados
+RYLD_close <- Cl(RYLD)
+TSLA_close <- Cl(TSLA)
+TM_close <- Cl(TM)
+GM_close <- Cl(GM)
+
+# Cargar el paquete necesario
+if (!requireNamespace("xts", quietly = TRUE)) {
+  install.packages("xts")
+}
+library(xts)
+
+# Combinar las series en un solo data frame
+prices <- merge.xts(RYLD_close, TSLA_close, TM_close, GM_close)
+colnames(prices) <- c("RYLD", "TSLA", "TM", "GM")
+
+# Transformar los datos para que sean adecuados para ggplot2
+prices_df <- data.frame(Date = index(prices), coredata(prices))
+prices_melted <- melt(prices_df, id.vars = "Date", variable.name = "Symbol", value.name = "Price")
+
+# Graficar las series en un mismo gráfico
+ggplot(prices_melted, aes(x = Date, y = Price, color = Symbol)) +
+  geom_line() +
+  labs(title = "Series de Precios de Cierre Ajustados",
+       x = "Fecha",
+       y = "Precio de Cierre Ajustado") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+
+# Cargar el paquete necesario
+if (!requireNamespace("vars", quietly = TRUE)) {
+  install.packages("vars")
+}
+library(vars)
+
+
+# Convertir `prices` a un objeto ts
+prices_ts <- as.ts(prices)
+
+# Seleccionar el modelo VAR
+nivelka <- VARselect(prices_ts, lag.max = 7, type = "trend")
+
+# Mostrar los resultados de la selección del modelo VAR
+nivelka$selection
+
+
+# Cargar el paquete necesario
+if (!requireNamespace("urca", quietly = TRUE)) {
+  install.packages("urca")
+}
+library(urca)
+
+
+# Aplicar el test de cointegración de Johansen
+johatest <- ca.jo(prices_ts, type = "trace", K = 3, ecdet = "trend", spec = "longrun")
+
+# Resumen del test de cointegración de Johansen
+summary(johatest)
+
+#no estan cointegradas
+
+# Cargar el paquete necesario
+if (!requireNamespace("tseries", quietly = TRUE)) {
+  install.packages("tseries")
+}
+library(tseries)
+
+# Aplicar el test de Dickey-Fuller aumentado a cada columna
+adf_results <- lapply(prices_ts, adf.test)
+
+# Mostrar los resultados para cada columna
+for (i in 1:length(adf_results)) {
+  cat("Columna:", names(adf_results)[i], "\n")
+  print(adf_results[[i]])
+  cat("\n")
+}
+
+
+# Aplicar la función diff a cada columna para diferenciar las series
+differenced_prices <- lapply(prices, diff)
+
+# Convertir el resultado a un dataframe
+differenced_prices_df <- as.data.frame(differenced_prices)
+
+
+# Visualizar el nuevo conjunto de datos con las series diferenciadas
+head(differenced_prices_df)
+
+# Eliminar las filas con NA
+diff_prices <- na.omit(differenced_prices_df)
+
+# Convertir `prices` a un objeto ts
+prices_ts <- as.ts(diff_prices)
+
+# Seleccionar el modelo VAR
+nivelka <- VARselect(prices_ts, lag.max = 7, type = "trend")
+
+# Mostrar los resultados de la selección del modelo VAR
+nivelka$selection
+
+
+# Cargar el paquete necesario
+if (!requireNamespace("vars", quietly = TRUE)) {
+  install.packages("vars")
+}
+library(vars)
+
+# Cargar el paquete necesario
+if (!requireNamespace("fpp3", quietly = TRUE)) {
+  install.packages("fpp3")
+}
+library(fpp3)
+
+# Cargar el paquete necesario
+if (!requireNamespace("MTS", quietly = TRUE)) {
+  install.packages("MTS")
+}
+library(MTS)
+
+
+m0 = vars::VAR(prices_ts, p=2)
+summary(m0)
+
+# Aplicar VARorder
+VARorder <- VARorder(prices_ts)
+
+m1=MTS::VAR(prices_ts,2)
+
+resi=m1$residuals
+
+mq(resi, adj=7)
+
+#acf(resi) 
+
+
+m2=refVAR(m1,thres = 1.96)
+
+resi2=m2$residuals
+
+mq(resi2, adj=7)
+
+MTSdiag(m2, adj=7)
+
+#phi1= m2$Phi[,c(1,2,3,4)]
+#phi2= m2$Phi[,c(5,6,7,8)]
+#eigen(phi1)
+#eigen(phi2)
+
+# Generar las respuestas al impulso
+m1irf <- irf(m0, n.ahead = 10, boot = TRUE)
+
+# Visualizar las respuestas al impulso
+plot(m1irf)
+
+#Apliquemos la predicción al segundo modelo. Esto, ya que la función VARpredict pertenece a la librería de MTS.
+#Igualmente, podemos observar que se generan los resultados de pronóstico de cada una de las series y las ecuaciones de estimación de las series.
+predm2=VARpred(m2, 10)
+var_est3 <- vars::VAR(y=prices_ts, lag.max = 2)
+summary(var_est3)
+
+nhor=10 #pasos en el pronóstico.
+nr_lev <- nrow(prices)
+mr_lev= as.matrix(prices)
+
+# Generamos primeramente una estructura de datos con NAs que se poblarán con los valores de pronóstico, que se irán sumando acumuladamente.
+m.varf_lev_ft <- rbind(mr_lev[,1:4], matrix(NA, nhor,4 ))
+head(m.varf_lev_ft)
+tail(m.varf_lev_ft)
+
+
+#En la función de recuperación, especificamos los valores que se consideran del modelo seleccionado. Generamos igualmente una visualización del resultado.
+m.ft_df <- predm2$pred
+for(h in (nr_lev+1):(nr_lev+nhor)) {
+  hf <- h - nr_lev
+  m.varf_lev_ft[h,] <- m.varf_lev_ft[h-1,] + m.ft_df[hf,]
+}
+str.main=c("RYLD", "TSLA", "TM", "GM")
+par(mfrow=c(4,1), mar=c(2,2,2,2))
+for(i in 1:4) {
+  df <- m.varf_lev_ft[,i]
+  matplot(df, type=c("l"), col = c("blue"), 
+          main = str.main[i]) 
+  abline(v=nr_lev, col="blue")
+}
+
+
+# Partición de los datos en 5% de prueba y 95% de entrenamiento
+set.seed(123) # Para reproducibilidad
+n <- nrow(prices_ts)
+train_index <- 1:floor(0.95 * n)
+test_index <- (floor(0.95 * n) + 1):n
+
+train_data <- prices_ts[train_index, ]
+test_data <- prices_ts[test_index, ]
+
+# Ajustar el modelo VAR
+var_model <- MTS::VAR(train_data,2)
+
+# Refinar el modelo VAR usando 'refVAR'
+ref_var_model <- MTS::refVAR(var_model, thres = 1.96)
+
+# Realizar el pronóstico usando VARpred de MTS
+nhor <- length(test_index) # pasos en el pronóstico
+predm2 <- MTS::VARpred(ref_var_model, nhor)
+
+# Obtener los niveles actuales y predichos
+nr_lev <- nrow(prices_ts)
+mr_lev <- as.matrix(prices_ts)
+
+# Generar estructura de datos con NAs para los valores de pronóstico
+m.varf_lev_ft <- rbind(mr_lev[,1:4], matrix(NA, nhor, 4))
+
+# Llenar la estructura de datos con los valores de pronóstico
+m.ft_df <- predm2$pred
+for (h in (nr_lev + 1):(nr_lev + nhor)) {
+  hf <- h - nr_lev
+  m.varf_lev_ft[h,] <- m.varf_lev_ft[h-1,] + m.ft_df[hf,]
+}
+
+# Visualización del resultado
+str.main <- c("RYLD", "TSLA", "TM", "GM")
+par(mfrow = c(4, 1), mar = c(2, 2, 2, 2))
+for (i in 1:4) {
+  df <- m.varf_lev_ft[, i]
+  matplot(df, type = "l", col = "blue", main = str.main[i])
+  abline(v = nr_lev, col = "blue")
+}
+
+# Funciones de métricas
+mape <- function(actual, forecast) {
+  mean(abs((actual - forecast) / actual)) * 100
+}
+
+rmse <- function(actual, forecast) {
+  sqrt(mean((actual - forecast)^2))
+}
+
+mae <- function(actual, forecast) {
+  mean(abs(actual - forecast))
+}
+
+# Obtener las predicciones correspondientes al conjunto de prueba
+predicted_ts <- m.varf_lev_ft[(nr_lev + 1):(nr_lev + length(test_index)),]
+
+# Calcular las métricas para cada serie temporal
+mape_values <- sapply(1:4, function(i) mape(test_data[, i], predicted_ts[, i]))
+rmse_values <- sapply(1:4, function(i) rmse(test_data[, i], predicted_ts[, i]))
+mae_values <- sapply(1:4, function(i) mae(test_data[, i], predicted_ts[, i]))
+
+# Mostrar las métricas
+metrics <- data.frame(
+  Series = colnames(prices_ts),
+  # MAPE = mape_values,
+  RMSE = rmse_values,
+  MAE = mae_values
+)
+
+print(metrics)
+
+# Eliminar la primera fila del dataframe prices
+prices <- prices[-1, ]
+
+# Transformar los datos para que sean adecuados para ggplot2
+prices_df <- data.frame(Date = index(prices), coredata(prices_ts))
+prices_melted <- melt(prices_df, id.vars = "Date", variable.name = "Symbol", value.name = "Price Diff")
+
+# Agregar los datos pronosticados al marco de datos
+forecast_df <- data.frame(Date = forecast_dates, coredata(predicted_ts))
+colnames(forecast_df)[-1] <- paste(colnames(forecast_df)[-1], "_Forecast", sep = "")
+
+# Unir los datos históricos y pronosticados
+combined_df <- merge(prices_df, forecast_df, by = "Date", all = TRUE)
+
+# Transformar los datos para ggplot2
+combined_melted <- melt(combined_df, id.vars = "Date", variable.name = "Variable", value.name = "Price")
+
+# Graficar el historial real y el pronóstico en un mismo gráfico
+library(ggplot2)
+ggplot(combined_melted, aes(x = Date, y = Price, color = Variable)) +
+  geom_line() +
+  labs(title = "Historial Real y Pronóstico",
+       x = "Fecha",
+       y = "Precio de Cierre Ajustado") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+  
+
+
+# Crear un vector para los modelos
+modelos <- c("VAR_RMSE", "VAR_MAE", "ARDL_RMSE", "ARDL_MAE")
+
+# Crear un vector para los valores de RMSE y MAE
+valores <- c(0.1321898, 0.1033501, 0.1331323, 0.101944)
+
+# Definir colores para cada tipo de métrica
+colores <- c("lightblue", "lightgreen", "lightblue", "lightgreen")
+
+# Gráfico de barras comparativas
+barplot(valores, names.arg = modelos, main = "Comparación de Métricas", col = colores, ylim = c(0, max(valores) + 0.02), beside = TRUE, xlab = "Modelos", ylab = "Valor")
+
+# Agregar etiquetas con los valores de cada barra
+text(x = 1:length(valores), y = valores + 0.005, labels = round(valores, 4), pos = 3, cex = 0.8, col = "black")
+
+
+
+
+
+
+
+
+
